@@ -2,115 +2,77 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
-const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const {
-  DynamoDBDocumentClient,
-  ScanCommand,
-  PutCommand,
-  DeleteCommand
-} = require('@aws-sdk/lib-dynamodb');
+const mongoose = require('mongoose');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const REGION = process.env.AWS_REGION || 'us-east-1';
-const TABLE_NAME = process.env.DYNAMODB_TABLE_NAME || 'Notes';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/notesdb';
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Initialize DynamoDB Document Client
-const ddbClient = new DynamoDBClient({ region: REGION });
-const docClient = DynamoDBDocumentClient.from(ddbClient);
-
-// In-memory fallback if DynamoDB is unavailable or running locally without AWS credentials
+// In-memory fallback array for local dev or if MongoDB is temporarily offline
 let inMemoryNotes = [
   {
     id: 'demo-1',
-    title: 'Welcome Note',
-    content: 'Welcome to your Notes App! Requests flow: Frontend -> Backend -> Database.',
+    title: 'Welcome to Notes App',
+    content: 'This app is running on a 3-tier EC2 architecture (Frontend EC2 ➔ Backend EC2 ➔ Database EC2)!',
     createdAt: new Date().toISOString()
   }
 ];
 
-let useDynamoDB = process.env.USE_IN_MEMORY !== 'true';
+let nextInMemoryId = 2;
 
-// Helper: Fetch all notes from DynamoDB or in-memory
-async function getAllNotes() {
-  if (!useDynamoDB) return inMemoryNotes;
-  try {
-    const command = new ScanCommand({ TableName: TABLE_NAME });
-    const response = await docClient.send(command);
-    // Sort notes descending by createdAt
-    return (response.Items || []).sort(
-      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
-    );
-  } catch (err) {
-    console.warn(`[DynamoDB Scan Warning]: ${err.message}. Falling back to in-memory store.`);
-    return inMemoryNotes;
-  }
-}
+// --- MongoDB Configuration ---
+let isMongoConnected = false;
 
-// Helper: Save note to DynamoDB or in-memory
-async function saveNote(note) {
-  if (!useDynamoDB) {
-    inMemoryNotes.unshift(note);
-    return note;
-  }
-  try {
-    const command = new PutCommand({
-      TableName: TABLE_NAME,
-      Item: note
-    });
-    await docClient.send(command);
-    return note;
-  } catch (err) {
-    console.warn(`[DynamoDB Put Warning]: ${err.message}. Saving to in-memory fallback.`);
-    inMemoryNotes.unshift(note);
-    return note;
-  }
-}
+const noteSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  content: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
 
-// Helper: Delete note
-async function removeNote(id) {
-  if (!useDynamoDB) {
-    inMemoryNotes = inMemoryNotes.filter(n => n.id !== id);
-    return true;
+// Clean up JSON output (convert _id to id)
+noteSchema.set('toJSON', {
+  transform: (doc, ret) => {
+    ret.id = ret._id.toString();
+    delete ret._id;
+    delete ret.__v;
+    return ret;
   }
-  try {
-    const command = new DeleteCommand({
-      TableName: TABLE_NAME,
-      Key: { id }
-    });
-    await docClient.send(command);
-    return true;
-  } catch (err) {
-    console.warn(`[DynamoDB Delete Warning]: ${err.message}. Deleting from in-memory fallback.`);
-    inMemoryNotes = inMemoryNotes.filter(n => n.id !== id);
-    return true;
-  }
-}
+});
+
+const Note = mongoose.model('Note', noteSchema);
+
+// Connect to MongoDB
+mongoose.connect(MONGODB_URI, {
+  serverSelectionTimeoutMS: 3000
+})
+  .then(() => {
+    isMongoConnected = true;
+    console.log(`[Database] Connected successfully to MongoDB at: ${MONGODB_URI}`);
+  })
+  .catch((err) => {
+    isMongoConnected = false;
+    console.warn(`[Database Warning] Could not connect to MongoDB: ${err.message}`);
+    console.warn(`[Database Warning] Using in-memory fallback. Ensure MongoDB EC2 is running and security group allows port 27017.`);
+  });
+
+mongoose.connection.on('connected', () => { isMongoConnected = true; });
+mongoose.connection.on('disconnected', () => { isMongoConnected = false; });
+mongoose.connection.on('error', () => { isMongoConnected = false; });
 
 // --- API Routes ---
 
-// 1. Health check (Reports DB status & AWS Region)
-app.get('/api/health', async (req, res) => {
-  let dbStatus = 'In-Memory (Offline/Fallback)';
-  try {
-    if (useDynamoDB) {
-      await docClient.send(new ScanCommand({ TableName: TABLE_NAME, Limit: 1 }));
-      dbStatus = `DynamoDB Connected (${TABLE_NAME} in ${REGION})`;
-    }
-  } catch (err) {
-    dbStatus = `DynamoDB Unreachable (${err.name || 'Check IAM/Table'}). Using Fallback.`;
-  }
-
+// 1. Health Check
+app.get('/api/health', (req, res) => {
+  const connected = mongoose.connection.readyState === 1;
   res.json({
     status: 'ok',
     message: 'Backend server is running',
-    database: dbStatus,
-    region: REGION,
+    database: connected ? 'MongoDB Connected (EC2)' : 'In-Memory Fallback (MongoDB Disconnected)',
+    dbUri: MONGODB_URI.replace(/\/\/.*@/, '//***@'), // hide passwords if any
     timestamp: new Date().toISOString()
   });
 });
@@ -118,8 +80,12 @@ app.get('/api/health', async (req, res) => {
 // 2. Get all notes
 app.get('/api/notes', async (req, res) => {
   try {
-    const notes = await getAllNotes();
-    res.json(notes);
+    if (mongoose.connection.readyState === 1) {
+      const notes = await Note.find().sort({ createdAt: -1 });
+      return res.json(notes);
+    }
+    // Fallback
+    res.json(inMemoryNotes);
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve notes: ' + err.message });
   }
@@ -132,16 +98,24 @@ app.post('/api/notes', async (req, res) => {
     return res.status(400).json({ error: 'Title and content are required' });
   }
 
-  const newNote = {
-    id: uuidv4(),
-    title: title.trim(),
-    content: content.trim(),
-    createdAt: new Date().toISOString()
-  };
-
   try {
-    const saved = await saveNote(newNote);
-    res.status(201).json(saved);
+    if (mongoose.connection.readyState === 1) {
+      const newNote = await Note.create({
+        title: title.trim(),
+        content: content.trim()
+      });
+      return res.status(201).json(newNote);
+    }
+
+    // Fallback
+    const fallbackNote = {
+      id: String(nextInMemoryId++),
+      title: title.trim(),
+      content: content.trim(),
+      createdAt: new Date().toISOString()
+    };
+    inMemoryNotes.unshift(fallbackNote);
+    res.status(201).json(fallbackNote);
   } catch (err) {
     res.status(500).json({ error: 'Failed to create note: ' + err.message });
   }
@@ -150,15 +124,22 @@ app.post('/api/notes', async (req, res) => {
 // 4. Delete a note
 app.delete('/api/notes/:id', async (req, res) => {
   const { id } = req.params;
+
   try {
-    await removeNote(id);
-    res.json({ message: 'Note deleted successfully', id });
+    if (mongoose.connection.readyState === 1) {
+      await Note.findByIdAndDelete(id);
+      return res.json({ message: 'Note deleted from MongoDB', id });
+    }
+
+    // Fallback
+    inMemoryNotes = inMemoryNotes.filter(n => n.id !== id);
+    res.json({ message: 'Note deleted from fallback store', id });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete note: ' + err.message });
   }
 });
 
-// Serve frontend static build if it exists (for single-server preview)
+// Serve frontend static build if it exists
 const frontendDist = path.join(__dirname, '../frontend/dist');
 app.use(express.static(frontendDist));
 
@@ -169,8 +150,8 @@ app.get('*', (req, res, next) => {
   });
 });
 
-// Start server
+// Start Server
 app.listen(PORT, () => {
   console.log(`Backend server running on http://localhost:${PORT}`);
-  console.log(`Target Database: DynamoDB (Table: ${TABLE_NAME}, Region: ${REGION})`);
+  console.log(`Configured MongoDB URI: ${MONGODB_URI}`);
 });

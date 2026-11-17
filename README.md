@@ -1,142 +1,165 @@
-# 3-Tier Notes App (React Frontend EC2 + Node.js Backend EC2 + AWS DynamoDB)
+# 3-Tier Cloud Architecture on AWS EC2 (College Project)
 
-A full-stack, cloud-native **Notes Application** deployed across a 3-tier architecture:
-1. **Presentation Tier (Frontend)**: React (Vite) hosted on an EC2 instance with Nginx.
-2. **Application Tier (Backend)**: Node.js Express REST API hosted on an EC2 instance with PM2.
-3. **Data Tier (Database)**: AWS DynamoDB (fully managed, serverless NoSQL database).
+A full-stack **Notes Application** deployed across a classic **3-Tier Architecture** using **3 separate AWS EC2 instances**:
+1. **Presentation Tier (Frontend)**: React (Vite) + Nginx Web Server on EC2 Instance #1.
+2. **Application Tier (Backend)**: Node.js Express REST API + PM2 on EC2 Instance #2.
+3. **Database Tier (Database)**: MongoDB Database Server on EC2 Instance #3.
 
 ---
 
-## 🏗️ Architecture & Request Flow
+## 🏗️ 3-Tier Architecture Diagram & Request Flow
 
 ```text
-[ User's Web Browser ]
-        │
-        │ HTTP (Port 80)
-        ▼
-┌─────────────────────────────────┐
-│       Frontend EC2 Instance     │
-│   • Nginx Reverse Proxy (:80)   │
-│   • React Production Build      │
-└───────────────┬─────────────────┘
-                │
-                │ HTTP Proxy: /api/* ➔ Backend Private IP (:5000)
-                ▼
-┌─────────────────────────────────┐
-│       Backend EC2 Instance      │
-│   • Node.js + Express (:5000)   │
-│   • PM2 Process Manager         │
-│   • IAM Role (DynamoDB Access)  │
-└───────────────┬─────────────────┘
-                │
-                │ AWS SDK (HTTPS)
-                ▼
-┌─────────────────────────────────┐
-│          AWS DynamoDB           │
-│   • Table: Notes                │
-│   • Partition Key: id (String)  │
-└─────────────────────────────────┘
+               [ Public Internet / User Browser ]
+                               │
+                               │ HTTP Request (Port 80)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Tier 1: Frontend EC2 Instance                              │
+│  • Public IP: Yes                                           │
+│  • Security Group: frontend-sg (Allows Port 80 from 0.0.0.0)│
+│  • Web Server: Nginx                                        │
+│  • Serves React build from /                                │
+│  • Reverse-proxies /api/* to Backend EC2 Private IP:5000    │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               │ VPC Private Network (Port 5000)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Tier 2: Backend EC2 Instance                               │
+│  • Public IP: Yes (for SSH) / Private IP for communication  │
+│  • Security Group: backend-sg (Allows Port 5000 ONLY from   │
+│    frontend-sg)                                             │
+│  • Process Manager: PM2                                     │
+│  • Runtime: Node.js + Express REST API                      │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               │ VPC Private Network (Port 27017)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Tier 3: Database EC2 Instance                              │
+│  • Security Group: database-sg (Allows Port 27017 ONLY      │
+│    from backend-sg)                                         │
+│  • Database: MongoDB (bindIp: 0.0.0.0)                      │
+│  • Isolated from public internet traffic                    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## ❓ EC2 for Database vs. DynamoDB: Which is better?
+## 🛡️ AWS Security Groups Configuration
 
-| Feature | DynamoDB (Recommended) | Self-Hosted DB on EC2 |
-| :--- | :--- | :--- |
-| **AWS Free Tier Cost** | **25 GB Free Forever** (does not burn EC2 compute hours) | Running a 3rd EC2 will **exceed the 750 free hours/month limit** and incur charges |
-| **Maintenance** | **Zero**. Fully managed by AWS | Manual OS updates, DB configuration, disk monitoring |
-| **High Availability** | Replicated across 3 Availability Zones automatically | Single point of failure unless complex clustering is configured |
-| **Backups** | Point-in-time recovery & on-demand snapshots | Manual EBS snapshots or DB dump scripts |
-| **Security** | Direct IAM Role authentication (no passwords in code) | Requires managing database passwords & network firewalls |
+Configure 3 Security Groups in the AWS EC2 Console:
 
-> **Verdict**: For production and cloud best-practice on AWS, **DynamoDB** is far superior. Running a database on an EC2 instance is only advised for academic exercises that specifically test manual Linux database administration.
-
----
-
-## ⚙️ AWS Setup Guide
-
-### 1. Create the DynamoDB Table
-1. Open the **AWS Management Console** ➔ **DynamoDB** ➔ **Tables** ➔ **Create table**.
-2. **Table name**: `Notes`
-3. **Partition key**: `id` (Type: `String`)
-4. **Table class**: Standard
-5. **Capacity mode**: On-demand (Free-tier friendly)
-6. Click **Create table**.
-
-### 2. Create IAM Role for Backend EC2
-1. Go to **IAM** ➔ **Roles** ➔ **Create role**.
-2. Trusted entity type: **AWS service**, Use case: **EC2**.
-3. Attach policy: `AmazonDynamoDBFullAccess` (or create a least-privilege policy for `Notes` table).
-4. Name the role: `EC2-DynamoDB-Notes-Role` and create it.
-5. In the EC2 Console, select your **Backend EC2 instance** ➔ **Actions** ➔ **Security** ➔ **Modify IAM role** ➔ Attach `EC2-DynamoDB-Notes-Role`.
-
----
-
-## 🛡️ Security Group Inbound Rules
-
-### Frontend EC2 Security Group (`frontend-sg`)
-| Type | Port Range | Source | Purpose |
+### 1. `frontend-sg` (Attached to Frontend EC2)
+| Type | Port | Source | Description |
 | :--- | :--- | :--- | :--- |
-| SSH | 22 | My IP | Admin terminal access |
-| HTTP | 80 | `0.0.0.0/0` | Public access to React UI |
+| **SSH** | `22` | `My IP` | Admin SSH terminal access |
+| **HTTP** | `80` | `0.0.0.0/0` | Public web traffic for visitors |
 
-### Backend EC2 Security Group (`backend-sg`)
-| Type | Port Range | Source | Purpose |
+### 2. `backend-sg` (Attached to Backend EC2)
+| Type | Port | Source | Description |
 | :--- | :--- | :--- | :--- |
-| SSH | 22 | My IP | Admin terminal access |
-| Custom TCP | 5000 | `frontend-sg` (or VPC CIDR) | Accepts requests **only from Frontend EC2** |
+| **SSH** | `22` | `My IP` | Admin SSH terminal access |
+| **Custom TCP** | `5000` | `frontend-sg` (Security Group ID) | Accepts API calls **only** from Frontend EC2 |
+
+### 3. `database-sg` (Attached to Database EC2)
+| Type | Port | Source | Description |
+| :--- | :--- | :--- | :--- |
+| **SSH** | `22` | `My IP` | Admin SSH terminal access |
+| **Custom TCP** | `27017` | `backend-sg` (Security Group ID) | Accepts DB queries **only** from Backend EC2 |
 
 ---
 
-## 💻 Commands to Run on EC2 Instances
+## 🚀 Setup Instructions for the 3 EC2 Instances
 
-### 🖥️ Backend EC2 Instance Setup
+### 🖥️ Step 1: Setup EC2 Instance #3 (Database - MongoDB)
+
+Launch an Ubuntu 22.04/24.04 EC2 instance with `database-sg`. Connect via SSH:
 
 ```bash
-# 1. Update system & install Node.js 20 & Git
+# 1. Update system packages
+sudo apt update -y && sudo apt upgrade -y
+
+# 2. Install MongoDB
+sudo apt install -y gnupg curl
+curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | \
+   sudo gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor --yes
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+sudo apt update -y
+sudo apt install -y mongodb-org
+
+# 3. Configure MongoDB to accept connections from the Backend EC2
+# Change bindIp from 127.0.0.1 to 0.0.0.0
+sudo sed -i 's/bindIp: 127.0.0.1/bindIp: 0.0.0.0/' /etc/mongod.conf
+
+# 4. Start & enable MongoDB service
+sudo systemctl daemon-reload
+sudo systemctl start mongod
+sudo systemctl enable mongod
+
+# 5. Check status
+sudo systemctl status mongod
+```
+
+> 📌 **Note your Database EC2's Private IP address** (e.g., `172.31.25.10`) from the AWS EC2 Console.
+
+---
+
+### 🖥️ Step 2: Setup EC2 Instance #2 (Backend - Node.js + Express)
+
+Launch an Ubuntu 22.04/24.04 EC2 instance with `backend-sg`. Connect via SSH:
+
+```bash
+# 1. Install Node.js 20, Git, and PM2
 sudo apt update -y && sudo apt upgrade -y
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs git
 sudo npm install -g pm2
 
-# 2. Clone repository & install backend dependencies
+# 2. Clone repository & install dependencies
 git clone https://github.com/Piyush-Singh-coder/Notes-app-ec2.git
 cd Notes-app-ec2/backend
 npm install
 
-# 3. Configure environment variables (specify your AWS Region)
-echo "PORT=5000" >> .env
-echo "AWS_REGION=us-east-1" >> .env
-echo "DYNAMODB_TABLE_NAME=Notes" >> .env
+# 3. Create .env with the Database EC2's Private IP
+# Replace <DB-PRIVATE-IP> with the actual Private IP of Instance #3
+cat <<EOT > .env
+PORT=5000
+MONGODB_URI=mongodb://<DB-PRIVATE-IP>:27017/notesdb
+EOT
 
-# 4. Start backend with PM2
+# 4. Start the backend with PM2
 pm2 start server.js --name "notes-backend"
 pm2 save
 pm2 startup
 ```
 
+> 📌 **Note your Backend EC2's Private IP address** (e.g., `172.31.18.5`) from the AWS EC2 Console.
+
 ---
 
-### 🖥️ Frontend EC2 Instance Setup
+### 🖥️ Step 3: Setup EC2 Instance #1 (Frontend - React + Nginx)
+
+Launch an Ubuntu 22.04/24.04 EC2 instance with `frontend-sg`. Connect via SSH:
 
 ```bash
-# 1. Update system & install Node.js 20, Git & Nginx
+# 1. Install Node.js 20, Git, and Nginx
 sudo apt update -y && sudo apt upgrade -y
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs git nginx
 
-# 2. Clone repository & build frontend
+# 2. Clone repository & build production React bundle
 git clone https://github.com/Piyush-Singh-coder/Notes-app-ec2.git
 cd Notes-app-ec2/frontend
 npm install
 npm run build
 
-# 3. Configure Nginx Reverse Proxy to point to Backend Private IP
+# 3. Configure Nginx Reverse Proxy
 sudo nano /etc/nginx/sites-available/default
 ```
 
-Paste the following Nginx configuration (replace `<BACKEND-PRIVATE-IP>` with the private IP of your Backend EC2 instance):
+Paste the following configuration *(replace `<BACKEND-PRIVATE-IP>` with the actual Private IP of Instance #2)*:
 
 ```nginx
 server {
@@ -145,14 +168,14 @@ server {
 
     server_name _;
 
-    # Serve static React frontend files
+    # Serve compiled React frontend
     location / {
         root /home/ubuntu/Notes-app-ec2/frontend/dist;
         index index.html index.htm;
         try_files $uri $uri/ /index.html;
     }
 
-    # Proxy API calls directly to the Backend EC2 private IP
+    # Proxy API calls directly to Backend EC2 Private IP
     location /api/ {
         proxy_pass http://<BACKEND-PRIVATE-IP>:5000/api/;
         proxy_http_version 1.1;
@@ -165,9 +188,16 @@ server {
 ```
 
 ```bash
-# 4. Test & Restart Nginx
+# 4. Test and restart Nginx
 sudo nginx -t
 sudo systemctl restart nginx
 ```
 
-🎉 Open `http://<FRONTEND-PUBLIC-IP>` in your browser!
+---
+
+### 🎉 Test Your Deployment
+1. Open `http://<FRONTEND-PUBLIC-IP>` in your browser.
+2. You will see:
+   - **Backend API**: `Connected`
+   - **Database Tier**: `MongoDB Connected (EC2)`
+3. Create a note, refresh the page, or delete notes to see persistent storage in MongoDB across the 3 EC2 instances!

@@ -23,7 +23,7 @@ function App() {
       if (res.ok) {
         const data = await res.json();
         setBackendStatus('Connected');
-        setDatabaseStatus(data.database || 'Active');
+        setDatabaseStatus(data.database || 'Connected');
       } else {
         setBackendStatus('Error');
         setDatabaseStatus('Unavailable');
@@ -43,7 +43,7 @@ function App() {
       const data = await res.json();
       setNotes(data);
     } catch (err) {
-      setError(`Cannot connect to Backend API at [${API_BASE}]. Verify that the Backend EC2 is running and its Security Group allows inbound traffic.`);
+      setError(`Cannot connect to Backend API at [${API_BASE}]. Verify that Backend EC2 is running and its Security Group allows traffic from Frontend.`);
     } finally {
       setLoading(false);
     }
@@ -76,7 +76,7 @@ function App() {
         method: 'DELETE',
       });
       if (!res.ok) throw new Error('Failed to delete note');
-      setNotes(notes.filter((note) => note.id !== id));
+      setNotes(notes.filter((note) => (note.id || note._id) !== id));
     } catch (err) {
       alert('Error deleting note: ' + err.message);
     }
@@ -85,8 +85,8 @@ function App() {
   return (
     <div className="container">
       <header className="header">
-        <h1>📝 Notes App (3-Tier Cloud Architecture)</h1>
-        <p className="subtitle">Frontend (EC2) ➔ Backend (EC2) ➔ Database (DynamoDB)</p>
+        <h1>📝 Notes App (3-Tier EC2 Architecture)</h1>
+        <p className="subtitle">Frontend (EC2) ➔ Backend (EC2) ➔ Database (EC2 MongoDB)</p>
 
         <div className="status-container">
           <div className="status-badge">
@@ -97,7 +97,7 @@ function App() {
           </div>
 
           <div className="status-badge">
-            Database:{' '}
+            Database Tier:{' '}
             <span className={`status-indicator ${databaseStatus.includes('Connected') ? 'connected' : databaseStatus.includes('Checking') ? 'checking' : 'warning'}`}>
               {databaseStatus}
             </span>
@@ -124,7 +124,7 @@ function App() {
             <input
               id="title"
               type="text"
-              placeholder="e.g., Cloud Architecture Tasks"
+              placeholder="e.g., EC2 MongoDB Configuration"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               required
@@ -151,29 +151,32 @@ function App() {
       <section className="notes-section">
         <h2>All Notes ({notes.length})</h2>
         {loading ? (
-          <p className="empty-state">Loading notes from database...</p>
+          <p className="empty-state">Loading notes from MongoDB EC2...</p>
         ) : notes.length === 0 ? (
-          <p className="empty-state">No notes found in database. Create your first note above!</p>
+          <p className="empty-state">No notes found in MongoDB. Create your first note above!</p>
         ) : (
           <div className="notes-grid">
-            {notes.map((note) => (
-              <div key={note.id} className="card note-card">
-                <div className="note-header">
-                  <h3>{note.title}</h3>
-                  <button
-                    className="btn btn-danger-icon"
-                    onClick={() => handleDeleteNote(note.id)}
-                    title="Delete Note"
-                  >
-                    ×
-                  </button>
+            {notes.map((note) => {
+              const noteId = note.id || note._id;
+              return (
+                <div key={noteId} className="card note-card">
+                  <div className="note-header">
+                    <h3>{note.title}</h3>
+                    <button
+                      className="btn btn-danger-icon"
+                      onClick={() => handleDeleteNote(noteId)}
+                      title="Delete Note"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <p className="note-content">{note.content}</p>
+                  <div className="note-footer">
+                    <small>{new Date(note.createdAt).toLocaleString()}</small>
+                  </div>
                 </div>
-                <p className="note-content">{note.content}</p>
-                <div className="note-footer">
-                  <small>{new Date(note.createdAt).toLocaleString()}</small>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
