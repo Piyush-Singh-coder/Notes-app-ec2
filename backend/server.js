@@ -1,75 +1,164 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  ScanCommand,
+  PutCommand,
+  DeleteCommand
+} = require('@aws-sdk/lib-dynamodb');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const REGION = process.env.AWS_REGION || 'us-east-1';
+const TABLE_NAME = process.env.DYNAMODB_TABLE_NAME || 'Notes';
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// In-memory data store (no database)
-let notes = [
+// Initialize DynamoDB Document Client
+const ddbClient = new DynamoDBClient({ region: REGION });
+const docClient = DynamoDBDocumentClient.from(ddbClient);
+
+// In-memory fallback if DynamoDB is unavailable or running locally without AWS credentials
+let inMemoryNotes = [
   {
-    id: 1,
+    id: 'demo-1',
     title: 'Welcome Note',
-    content: 'Welcome to your simple React + Node.js Note App! Data is stored in-memory in the backend.',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 2,
-    title: 'Features',
-    content: 'You can create new notes and delete existing ones in real time.',
+    content: 'Welcome to your Notes App! Requests flow: Frontend -> Backend -> Database.',
     createdAt: new Date().toISOString()
   }
 ];
 
-let nextId = 3;
+let useDynamoDB = process.env.USE_IN_MEMORY !== 'true';
 
-// Routes
-// 1. Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Backend is running smoothly' });
+// Helper: Fetch all notes from DynamoDB or in-memory
+async function getAllNotes() {
+  if (!useDynamoDB) return inMemoryNotes;
+  try {
+    const command = new ScanCommand({ TableName: TABLE_NAME });
+    const response = await docClient.send(command);
+    // Sort notes descending by createdAt
+    return (response.Items || []).sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+    );
+  } catch (err) {
+    console.warn(`[DynamoDB Scan Warning]: ${err.message}. Falling back to in-memory store.`);
+    return inMemoryNotes;
+  }
+}
+
+// Helper: Save note to DynamoDB or in-memory
+async function saveNote(note) {
+  if (!useDynamoDB) {
+    inMemoryNotes.unshift(note);
+    return note;
+  }
+  try {
+    const command = new PutCommand({
+      TableName: TABLE_NAME,
+      Item: note
+    });
+    await docClient.send(command);
+    return note;
+  } catch (err) {
+    console.warn(`[DynamoDB Put Warning]: ${err.message}. Saving to in-memory fallback.`);
+    inMemoryNotes.unshift(note);
+    return note;
+  }
+}
+
+// Helper: Delete note
+async function removeNote(id) {
+  if (!useDynamoDB) {
+    inMemoryNotes = inMemoryNotes.filter(n => n.id !== id);
+    return true;
+  }
+  try {
+    const command = new DeleteCommand({
+      TableName: TABLE_NAME,
+      Key: { id }
+    });
+    await docClient.send(command);
+    return true;
+  } catch (err) {
+    console.warn(`[DynamoDB Delete Warning]: ${err.message}. Deleting from in-memory fallback.`);
+    inMemoryNotes = inMemoryNotes.filter(n => n.id !== id);
+    return true;
+  }
+}
+
+// --- API Routes ---
+
+// 1. Health check (Reports DB status & AWS Region)
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'In-Memory (Offline/Fallback)';
+  try {
+    if (useDynamoDB) {
+      await docClient.send(new ScanCommand({ TableName: TABLE_NAME, Limit: 1 }));
+      dbStatus = `DynamoDB Connected (${TABLE_NAME} in ${REGION})`;
+    }
+  } catch (err) {
+    dbStatus = `DynamoDB Unreachable (${err.name || 'Check IAM/Table'}). Using Fallback.`;
+  }
+
+  res.json({
+    status: 'ok',
+    message: 'Backend server is running',
+    database: dbStatus,
+    region: REGION,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // 2. Get all notes
-app.get('/api/notes', (req, res) => {
-  res.json(notes);
+app.get('/api/notes', async (req, res) => {
+  try {
+    const notes = await getAllNotes();
+    res.json(notes);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve notes: ' + err.message });
+  }
 });
 
-// 3. Create a new note
-app.post('/api/notes', (req, res) => {
+// 3. Create a note
+app.post('/api/notes', async (req, res) => {
   const { title, content } = req.body;
   if (!title || !content) {
     return res.status(400).json({ error: 'Title and content are required' });
   }
 
   const newNote = {
-    id: nextId++,
+    id: uuidv4(),
     title: title.trim(),
     content: content.trim(),
     createdAt: new Date().toISOString()
   };
 
-  notes.unshift(newNote); // prepend to show newest first
-  res.status(201).json(newNote);
-});
-
-// 4. Delete a note by id
-app.delete('/api/notes/:id', (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const initialLength = notes.length;
-  notes = notes.filter(note => note.id !== id);
-
-  if (notes.length === initialLength) {
-    return res.status(404).json({ error: 'Note not found' });
+  try {
+    const saved = await saveNote(newNote);
+    res.status(201).json(saved);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create note: ' + err.message });
   }
-
-  res.json({ message: 'Note deleted successfully', id });
 });
 
-// Serve frontend static build if it exists (for single-server/EC2 deployment)
+// 4. Delete a note
+app.delete('/api/notes/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await removeNote(id);
+    res.json({ message: 'Note deleted successfully', id });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete note: ' + err.message });
+  }
+});
+
+// Serve frontend static build if it exists (for single-server preview)
 const frontendDist = path.join(__dirname, '../frontend/dist');
 app.use(express.static(frontendDist));
 
@@ -83,4 +172,5 @@ app.get('*', (req, res, next) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`Backend server running on http://localhost:${PORT}`);
+  console.log(`Target Database: DynamoDB (Table: ${TABLE_NAME}, Region: ${REGION})`);
 });

@@ -8,9 +8,10 @@ function App() {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [backendStatus, setBackendStatus] = useState('Checking...');
+  const [databaseStatus, setDatabaseStatus] = useState('Checking...');
   const [error, setError] = useState('');
 
-  // Fetch initial notes and check backend status
+  // Fetch initial notes and check backend & database health
   useEffect(() => {
     fetchBackendHealth();
     fetchNotes();
@@ -20,12 +21,16 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/health`);
       if (res.ok) {
+        const data = await res.json();
         setBackendStatus('Connected');
+        setDatabaseStatus(data.database || 'Active');
       } else {
         setBackendStatus('Error');
+        setDatabaseStatus('Unavailable');
       }
     } catch {
       setBackendStatus('Disconnected');
+      setDatabaseStatus('Disconnected');
     }
   };
 
@@ -38,7 +43,7 @@ function App() {
       const data = await res.json();
       setNotes(data);
     } catch (err) {
-      setError('Cannot connect to backend. Make sure the Node.js server is running on port 5000.');
+      setError(`Cannot connect to Backend API at [${API_BASE}]. Verify that the Backend EC2 is running and its Security Group allows inbound traffic.`);
     } finally {
       setLoading(false);
     }
@@ -80,13 +85,27 @@ function App() {
   return (
     <div className="container">
       <header className="header">
-        <h1>📝 Simple Notes App</h1>
-        <p className="subtitle">React Frontend + Node.js Express Backend (In-Memory)</p>
-        <div className="status-badge">
-          Backend status:{' '}
-          <span className={`status-indicator ${backendStatus.toLowerCase().replace(/[^a-z]/g, '')}`}>
-            {backendStatus}
-          </span>
+        <h1>📝 Notes App (3-Tier Cloud Architecture)</h1>
+        <p className="subtitle">Frontend (EC2) ➔ Backend (EC2) ➔ Database (DynamoDB)</p>
+
+        <div className="status-container">
+          <div className="status-badge">
+            Backend API:{' '}
+            <span className={`status-indicator ${backendStatus.toLowerCase().replace(/[^a-z]/g, '')}`}>
+              {backendStatus}
+            </span>
+          </div>
+
+          <div className="status-badge">
+            Database:{' '}
+            <span className={`status-indicator ${databaseStatus.includes('Connected') ? 'connected' : databaseStatus.includes('Checking') ? 'checking' : 'warning'}`}>
+              {databaseStatus}
+            </span>
+          </div>
+        </div>
+
+        <div className="api-endpoint-tag">
+          API Target: <code>{API_BASE}</code>
         </div>
       </header>
 
@@ -105,7 +124,7 @@ function App() {
             <input
               id="title"
               type="text"
-              placeholder="e.g., Project Ideas"
+              placeholder="e.g., Cloud Architecture Tasks"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               required
@@ -132,9 +151,9 @@ function App() {
       <section className="notes-section">
         <h2>All Notes ({notes.length})</h2>
         {loading ? (
-          <p className="empty-state">Loading notes...</p>
+          <p className="empty-state">Loading notes from database...</p>
         ) : notes.length === 0 ? (
-          <p className="empty-state">No notes found. Create your first note above!</p>
+          <p className="empty-state">No notes found in database. Create your first note above!</p>
         ) : (
           <div className="notes-grid">
             {notes.map((note) => (
