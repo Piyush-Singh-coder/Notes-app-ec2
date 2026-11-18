@@ -2,93 +2,71 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  ScanCommand,
+  PutCommand,
+  DeleteCommand
+} = require('@aws-sdk/lib-dynamodb');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/notesdb';
 const AWS_REGION = process.env.AWS_REGION || 'ap-south-1';
+const DYNAMODB_TABLE_NAME = process.env.DYNAMODB_TABLE_NAME || 'Notes';
 const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME || '';
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Initialize S3 Client (IAM Role on EC2 handles credentials automatically)
+// Initialize AWS Clients (credentials automatically provided by EC2 IAM Role)
+const ddbClient = new DynamoDBClient({ region: AWS_REGION });
+const docClient = DynamoDBDocumentClient.from(ddbClient);
 const s3Client = new S3Client({ region: AWS_REGION });
 
-// Multer memory storage (holds file in memory buffer before streaming to S3)
+// Multer in-memory storage for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
-// In-memory fallback array for local dev or if MongoDB is temporarily offline
+// In-memory fallback if DynamoDB is offline or table is not created yet
 let inMemoryNotes = [
   {
     id: 'demo-1',
-    title: 'Welcome to Notes App',
-    content: 'This app is running on a 3-tier EC2 architecture with AWS S3 file attachments!',
+    title: 'Welcome to Cloud Notes App',
+    content: 'Full cloud-native stack: React (EC2) ➔ Express (EC2) ➔ AWS DynamoDB + AWS S3!',
     fileUrl: null,
     fileName: null,
     createdAt: new Date().toISOString()
   }
 ];
 
-let nextInMemoryId = 2;
-
-// --- MongoDB Configuration ---
-let isMongoConnected = false;
-
-const noteSchema = new mongoose.Schema({
-  title: { type: String, required: true },
-  content: { type: String, required: true },
-  fileUrl: { type: String, default: null },
-  fileName: { type: String, default: null },
-  createdAt: { type: Date, default: Date.now }
-});
-
-// Clean up JSON output (convert _id to id)
-noteSchema.set('toJSON', {
-  transform: (doc, ret) => {
-    ret.id = ret._id.toString();
-    delete ret._id;
-    delete ret.__v;
-    return ret;
+// Helper: Check DynamoDB connection
+async function checkDynamoDB() {
+  try {
+    await docClient.send(new ScanCommand({ TableName: DYNAMODB_TABLE_NAME, Limit: 1 }));
+    return true;
+  } catch (err) {
+    return false;
   }
-});
-
-const Note = mongoose.model('Note', noteSchema);
-
-// Connect to MongoDB
-mongoose.connect(MONGODB_URI, {
-  serverSelectionTimeoutMS: 3000
-})
-  .then(() => {
-    isMongoConnected = true;
-    console.log(`[Database] Connected successfully to MongoDB at: ${MONGODB_URI}`);
-  })
-  .catch((err) => {
-    isMongoConnected = false;
-    console.warn(`[Database Warning] Could not connect to MongoDB: ${err.message}`);
-    console.warn(`[Database Warning] Using in-memory fallback.`);
-  });
-
-mongoose.connection.on('connected', () => { isMongoConnected = true; });
-mongoose.connection.on('disconnected', () => { isMongoConnected = false; });
-mongoose.connection.on('error', () => { isMongoConnected = false; });
+}
 
 // --- API Routes ---
 
-// 1. Health Check (returns Database & S3 status)
-app.get('/api/health', (req, res) => {
-  const connected = mongoose.connection.readyState === 1;
+// 1. Health Check (returns DynamoDB & S3 status)
+app.get('/api/health', async (req, res) => {
+  const isDdbConnected = await checkDynamoDB();
   res.json({
     status: 'ok',
     message: 'Backend server is running',
-    database: connected ? 'MongoDB Connected (EC2)' : 'In-Memory Fallback (MongoDB Disconnected)',
+    database: isDdbConnected
+      ? `DynamoDB Connected (${DYNAMODB_TABLE_NAME})`
+      : `DynamoDB Table Not Ready (${DYNAMODB_TABLE_NAME}) - Using Fallback`,
     s3Bucket: S3_BUCKET_NAME ? `Configured (${S3_BUCKET_NAME})` : 'Not Configured (Optional)',
     region: AWS_REGION,
     timestamp: new Date().toISOString()
@@ -98,14 +76,15 @@ app.get('/api/health', (req, res) => {
 // 2. Get all notes
 app.get('/api/notes', async (req, res) => {
   try {
-    if (mongoose.connection.readyState === 1) {
-      const notes = await Note.find().sort({ createdAt: -1 });
-      return res.json(notes);
-    }
-    // Fallback
-    res.json(inMemoryNotes);
+    const command = new ScanCommand({ TableName: DYNAMODB_TABLE_NAME });
+    const response = await docClient.send(command);
+    const notes = (response.Items || []).sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+    );
+    res.json(notes);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve notes: ' + err.message });
+    console.warn(`[DynamoDB Scan Warning]: ${err.message}. Serving in-memory fallback.`);
+    res.json(inMemoryNotes);
   }
 });
 
@@ -121,11 +100,11 @@ app.post('/api/notes', upload.single('file'), async (req, res) => {
   let fileUrl = null;
   let fileName = null;
 
-  // Handle S3 file upload if file is present
+  // Handle S3 file upload if present
   if (file) {
     if (!S3_BUCKET_NAME) {
       return res.status(400).json({
-        error: 'S3_BUCKET_NAME is not configured on the backend server. Please add S3_BUCKET_NAME in backend/.env'
+        error: 'S3_BUCKET_NAME is not configured in backend/.env'
       });
     }
 
@@ -150,30 +129,28 @@ app.post('/api/notes', upload.single('file'), async (req, res) => {
     }
   }
 
-  try {
-    if (mongoose.connection.readyState === 1) {
-      const newNote = await Note.create({
-        title: title.trim(),
-        content: content.trim(),
-        fileUrl,
-        fileName
-      });
-      return res.status(201).json(newNote);
-    }
+  const newNote = {
+    id: uuidv4(),
+    title: title.trim(),
+    content: content.trim(),
+    createdAt: new Date().toISOString()
+  };
 
-    // Fallback
-    const fallbackNote = {
-      id: String(nextInMemoryId++),
-      title: title.trim(),
-      content: content.trim(),
-      fileUrl,
-      fileName,
-      createdAt: new Date().toISOString()
-    };
-    inMemoryNotes.unshift(fallbackNote);
-    res.status(201).json(fallbackNote);
+  if (fileUrl) newNote.fileUrl = fileUrl;
+  if (fileName) newNote.fileName = fileName;
+
+  try {
+    const putCommand = new PutCommand({
+      TableName: DYNAMODB_TABLE_NAME,
+      Item: newNote
+    });
+    await docClient.send(putCommand);
+    console.log(`[DynamoDB] Saved note ${newNote.id} to table ${DYNAMODB_TABLE_NAME}`);
+    res.status(201).json(newNote);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to save note: ' + err.message });
+    console.warn(`[DynamoDB Put Warning]: ${err.message}. Saving to fallback store.`);
+    inMemoryNotes.unshift(newNote);
+    res.status(201).json(newNote);
   }
 });
 
@@ -182,16 +159,17 @@ app.delete('/api/notes/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    if (mongoose.connection.readyState === 1) {
-      await Note.findByIdAndDelete(id);
-      return res.json({ message: 'Note deleted from MongoDB', id });
-    }
-
-    // Fallback
+    const deleteCommand = new DeleteCommand({
+      TableName: DYNAMODB_TABLE_NAME,
+      Key: { id }
+    });
+    await docClient.send(deleteCommand);
+    console.log(`[DynamoDB] Deleted note ${id} from table ${DYNAMODB_TABLE_NAME}`);
+    res.json({ message: 'Note deleted from DynamoDB', id });
+  } catch (err) {
+    console.warn(`[DynamoDB Delete Warning]: ${err.message}. Deleting from fallback store.`);
     inMemoryNotes = inMemoryNotes.filter(n => n.id !== id);
     res.json({ message: 'Note deleted from fallback store', id });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to delete note: ' + err.message });
   }
 });
 
@@ -209,6 +187,7 @@ app.get('*', (req, res, next) => {
 // Start Server
 app.listen(PORT, () => {
   console.log(`Backend server running on http://localhost:${PORT}`);
-  console.log(`Configured MongoDB URI: ${MONGODB_URI}`);
-  console.log(`Configured S3 Bucket: ${S3_BUCKET_NAME || 'None (Uploads disabled)'}`);
+  console.log(`AWS Region: ${AWS_REGION}`);
+  console.log(`DynamoDB Table: ${DYNAMODB_TABLE_NAME}`);
+  console.log(`S3 Bucket: ${S3_BUCKET_NAME || 'None (Uploads disabled)'}`);
 });

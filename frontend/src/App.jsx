@@ -70,7 +70,6 @@ function App() {
 
       const res = await fetch(`${API_BASE}/notes`, {
         method: 'POST',
-        // Note: Do not set Content-Type header when sending FormData! Browser automatically sets multipart/form-data boundary.
         body: formData,
       });
 
@@ -84,7 +83,6 @@ function App() {
       setTitle('');
       setContent('');
       setFile(null);
-      // Reset file input element
       const fileInput = document.getElementById('file');
       if (fileInput) fileInput.value = '';
     } catch (err) {
@@ -113,8 +111,8 @@ function App() {
   return (
     <div className="container">
       <header className="header">
-        <h1>📝 Notes App (AWS 3-Tier + S3 Storage)</h1>
-        <p className="subtitle">Frontend (EC2) ➔ Backend (EC2) ➔ MongoDB (EC2) + AWS S3 (Files)</p>
+        <h1>📝 Notes App (AWS Cloud Architecture)</h1>
+        <p className="subtitle">Frontend (EC2) ➔ Backend (EC2) ➔ AWS DynamoDB (NoSQL) + AWS S3 (Files)</p>
 
         <div className="status-container">
           <div className="status-badge">
@@ -159,7 +157,7 @@ function App() {
             <input
               id="title"
               type="text"
-              placeholder="e.g., AWS S3 Architecture Architecture"
+              placeholder="e.g., AWS Cloud Architecture"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               required
@@ -180,7 +178,7 @@ function App() {
           {/* S3 File Upload Field */}
           <div className="form-group">
             <label htmlFor="file">
-              📎 Attach File or Image <span className="label-hint">(Uploaded to AWS S3 & URL saved in MongoDB)</span>
+              📎 Attach File or Image <span className="label-hint">(Uploaded to AWS S3 & URL saved in DynamoDB)</span>
             </label>
             <input
               id="file"
@@ -205,9 +203,9 @@ function App() {
       <section className="notes-section">
         <h2>All Notes ({notes.length})</h2>
         {loading ? (
-          <p className="empty-state">Loading notes from MongoDB EC2...</p>
+          <p className="empty-state">Loading notes from DynamoDB...</p>
         ) : notes.length === 0 ? (
-          <p className="empty-state">No notes found. Create your first note with a file above!</p>
+          <p className="empty-state">No notes found in DynamoDB. Create your first note with a file above!</p>
         ) : (
           <div className="notes-grid">
             {notes.map((note) => {
