@@ -119,7 +119,19 @@ body {
   margin-bottom: 6px;
 }
 
-.form-group input,
+.label-hint {
+  font-size: 0.75rem;
+  font-weight: normal;
+  color: #718096;
+}
+
+.file-selected-text {
+  font-size: 0.85rem;
+  color: #3182ce;
+  margin-top: 6px;
+}
+
+.form-group input[type="text"],
 .form-group textarea {
   width: 100%;
   padding: 10px 12px;
@@ -129,6 +141,16 @@ body {
   outline: none;
   font-family: inherit;
   transition: border-color 0.2s;
+}
+
+.form-group input[type="file"] {
+  width: 100%;
+  padding: 8px;
+  font-size: 0.9rem;
+  border: 1px dashed #cbd5e0;
+  border-radius: 6px;
+  background-color: #f7fafc;
+  cursor: pointer;
 }
 
 .form-group input:focus,
@@ -152,8 +174,13 @@ body {
   font-size: 0.95rem;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   background-color: #2b6cb0;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .btn-danger-icon {
@@ -204,6 +231,40 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   margin-bottom: 12px;
+}
+
+.attachment-box {
+  margin: 12px 0;
+  padding: 10px;
+  background: #f7fafc;
+  border-radius: 6px;
+  border: 1px solid #edf2f7;
+}
+
+.image-container {
+  margin-bottom: 8px;
+}
+
+.attachment-img {
+  max-width: 100%;
+  max-height: 280px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  display: block;
+}
+
+.attachment-link {
+  display: inline-block;
+  color: #3182ce;
+  font-weight: 500;
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.attachment-link:hover {
+  text-decoration: underline;
+  color: #2b6cb0;
 }
 
 .note-footer {

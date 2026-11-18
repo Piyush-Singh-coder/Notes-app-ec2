@@ -6,12 +6,15 @@ function App() {
   const [notes, setNotes] = useState([]);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [backendStatus, setBackendStatus] = useState('Checking...');
   const [databaseStatus, setDatabaseStatus] = useState('Checking...');
+  const [s3Status, setS3Status] = useState('Checking...');
   const [error, setError] = useState('');
 
-  // Fetch initial notes and check backend & database health
+  // Fetch initial notes and check backend, database & S3 health
   useEffect(() => {
     fetchBackendHealth();
     fetchNotes();
@@ -24,13 +27,16 @@ function App() {
         const data = await res.json();
         setBackendStatus('Connected');
         setDatabaseStatus(data.database || 'Connected');
+        setS3Status(data.s3Bucket || 'Active');
       } else {
         setBackendStatus('Error');
         setDatabaseStatus('Unavailable');
+        setS3Status('Unavailable');
       }
     } catch {
       setBackendStatus('Disconnected');
       setDatabaseStatus('Disconnected');
+      setS3Status('Disconnected');
     }
   };
 
@@ -43,7 +49,7 @@ function App() {
       const data = await res.json();
       setNotes(data);
     } catch (err) {
-      setError(`Cannot connect to Backend API at [${API_BASE}]. Verify that Backend EC2 is running and its Security Group allows traffic from Frontend.`);
+      setError(`Cannot connect to Backend API at [${API_BASE}]. Verify that Backend EC2 is running and Nginx is proxying /api/.`);
     } finally {
       setLoading(false);
     }
@@ -53,20 +59,38 @@ function App() {
     e.preventDefault();
     if (!title.trim() || !content.trim()) return;
 
+    setSubmitting(true);
     try {
+      const formData = new FormData();
+      formData.append('title', title.trim());
+      formData.append('content', content.trim());
+      if (file) {
+        formData.append('file', file);
+      }
+
       const res = await fetch(`${API_BASE}/notes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, content }),
+        // Note: Do not set Content-Type header when sending FormData! Browser automatically sets multipart/form-data boundary.
+        body: formData,
       });
 
-      if (!res.ok) throw new Error('Failed to add note');
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to create note');
+      }
+
       const newNote = await res.json();
       setNotes([newNote, ...notes]);
       setTitle('');
       setContent('');
+      setFile(null);
+      // Reset file input element
+      const fileInput = document.getElementById('file');
+      if (fileInput) fileInput.value = '';
     } catch (err) {
       alert('Error creating note: ' + err.message);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -82,11 +106,15 @@ function App() {
     }
   };
 
+  const isImageFile = (url) => {
+    return /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(url);
+  };
+
   return (
     <div className="container">
       <header className="header">
-        <h1>📝 Notes App (3-Tier EC2 Architecture)</h1>
-        <p className="subtitle">Frontend (EC2) ➔ Backend (EC2) ➔ Database (EC2 MongoDB)</p>
+        <h1>📝 Notes App (AWS 3-Tier + S3 Storage)</h1>
+        <p className="subtitle">Frontend (EC2) ➔ Backend (EC2) ➔ MongoDB (EC2) + AWS S3 (Files)</p>
 
         <div className="status-container">
           <div className="status-badge">
@@ -102,6 +130,13 @@ function App() {
               {databaseStatus}
             </span>
           </div>
+
+          <div className="status-badge">
+            S3 Storage:{' '}
+            <span className={`status-indicator ${s3Status.includes('Configured') ? 'connected' : s3Status.includes('Checking') ? 'checking' : 'warning'}`}>
+              {s3Status}
+            </span>
+          </div>
         </div>
 
         <div className="api-endpoint-tag">
@@ -115,16 +150,16 @@ function App() {
         </div>
       )}
 
-      {/* Note Creation Form */}
+      {/* Note Creation Form with S3 File Upload */}
       <section className="card form-card">
-        <h2>Add a New Note</h2>
+        <h2>Add a New Note with File Attachment</h2>
         <form onSubmit={handleAddNote}>
           <div className="form-group">
             <label htmlFor="title">Title</label>
             <input
               id="title"
               type="text"
-              placeholder="e.g., EC2 MongoDB Configuration"
+              placeholder="e.g., AWS S3 Architecture Architecture"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               required
@@ -135,14 +170,33 @@ function App() {
             <textarea
               id="content"
               rows="3"
-              placeholder="Write your note content here..."
+              placeholder="Write your note description here..."
               value={content}
               onChange={(e) => setContent(e.target.value)}
               required
             ></textarea>
           </div>
-          <button type="submit" className="btn btn-primary">
-            + Add Note
+
+          {/* S3 File Upload Field */}
+          <div className="form-group">
+            <label htmlFor="file">
+              📎 Attach File or Image <span className="label-hint">(Uploaded to AWS S3 & URL saved in MongoDB)</span>
+            </label>
+            <input
+              id="file"
+              type="file"
+              accept="image/*,.pdf,.doc,.docx,.txt"
+              onChange={(e) => setFile(e.target.files[0] || null)}
+            />
+            {file && (
+              <p className="file-selected-text">
+                Selected: <strong>{file.name}</strong> ({(file.size / 1024).toFixed(1)} KB)
+              </p>
+            )}
+          </div>
+
+          <button type="submit" className="btn btn-primary" disabled={submitting}>
+            {submitting ? 'Uploading to S3 & Saving...' : '+ Add Note'}
           </button>
         </form>
       </section>
@@ -153,7 +207,7 @@ function App() {
         {loading ? (
           <p className="empty-state">Loading notes from MongoDB EC2...</p>
         ) : notes.length === 0 ? (
-          <p className="empty-state">No notes found in MongoDB. Create your first note above!</p>
+          <p className="empty-state">No notes found. Create your first note with a file above!</p>
         ) : (
           <div className="notes-grid">
             {notes.map((note) => {
@@ -171,6 +225,31 @@ function App() {
                     </button>
                   </div>
                   <p className="note-content">{note.content}</p>
+
+                  {/* S3 Attachment Display */}
+                  {note.fileUrl && (
+                    <div className="attachment-box">
+                      {isImageFile(note.fileUrl) ? (
+                        <div className="image-container">
+                          <img
+                            src={note.fileUrl}
+                            alt={note.fileName || 'S3 Attachment'}
+                            className="attachment-img"
+                            loading="lazy"
+                          />
+                        </div>
+                      ) : null}
+                      <a
+                        href={note.fileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="attachment-link"
+                      >
+                        📂 {note.fileName || 'View Attachment'} ↗
+                      </a>
+                    </div>
+                  )}
+
                   <div className="note-footer">
                     <small>{new Date(note.createdAt).toLocaleString()}</small>
                   </div>
