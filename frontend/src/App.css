@@ -13,7 +13,7 @@ body {
 }
 
 .container {
-  max-width: 760px;
+  max-width: 780px;
   margin: 0 auto;
 }
 
@@ -83,6 +83,37 @@ body {
   font-family: monospace;
 }
 
+/* Tabs */
+.tabs {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.tab-btn {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  padding: 10px 20px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #4a5568;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  background: #edf2f7;
+}
+
+.tab-btn.active {
+  background: #3182ce;
+  color: #ffffff;
+  border-color: #3182ce;
+  box-shadow: 0 2px 6px rgba(49, 130, 206, 0.3);
+}
+
 .error-banner {
   background-color: #fff5f5;
   border: 1px solid #feb2b2;
@@ -120,9 +151,11 @@ body {
 }
 
 .label-hint {
+  display: block;
   font-size: 0.75rem;
   font-weight: normal;
   color: #718096;
+  margin-top: 4px;
 }
 
 .file-selected-text {
@@ -131,7 +164,30 @@ body {
   margin-top: 6px;
 }
 
+.shared-note-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #ebf8ff;
+  border: 1px solid #bee3f8;
+  color: #2b6cb0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  margin-bottom: 14px;
+}
+
+.btn-clear-tag {
+  background: transparent;
+  border: none;
+  font-size: 1.1rem;
+  color: #e53e3e;
+  cursor: pointer;
+  line-height: 1;
+}
+
 .form-group input[type="text"],
+.form-group input[type="email"],
 .form-group textarea {
   width: 100%;
   padding: 10px 12px;
@@ -183,6 +239,24 @@ body {
   cursor: not-allowed;
 }
 
+.note-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-share {
+  background: #edf2f7;
+  color: #3182ce;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  border-radius: 4px;
+}
+
+.btn-share:hover {
+  background: #e2e8f0;
+}
+
 .btn-danger-icon {
   background: transparent;
   color: #a0aec0;
@@ -197,8 +271,14 @@ body {
 
 .notes-section h2 {
   font-size: 1.25rem;
-  margin-bottom: 16px;
+  margin-bottom: 6px;
   color: #2d3748;
+}
+
+.section-desc {
+  font-size: 0.85rem;
+  color: #718096;
+  margin-bottom: 16px;
 }
 
 .notes-grid {
@@ -270,6 +350,55 @@ body {
 .note-footer {
   font-size: 0.75rem;
   color: #a0aec0;
+}
+
+/* Email Cards */
+.email-card {
+  border-left: 4px solid #38a169;
+}
+
+.email-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.badge-sent {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: #c6f6d5;
+  color: #22543d;
+  padding: 2px 8px;
+  border-radius: 12px;
+  margin-bottom: 4px;
+}
+
+.email-title {
+  font-size: 1.1rem;
+  color: #2d3748;
+}
+
+.email-date {
+  font-size: 0.75rem;
+  color: #a0aec0;
+  white-space: nowrap;
+}
+
+.email-meta {
+  font-size: 0.85rem;
+  color: #718096;
+  margin-bottom: 10px;
+}
+
+.email-body {
+  font-size: 0.95rem;
+  color: #2d3748;
+  background: #f7fafc;
+  padding: 10px 12px;
+  border-radius: 6px;
+  white-space: pre-wrap;
 }
 
 .empty-state {
